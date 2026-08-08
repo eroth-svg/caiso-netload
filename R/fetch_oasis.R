@@ -35,7 +35,7 @@ fetch_oasis <- function(queryname, start, end, extra = list()) {
 }
 
 # Fetch a long date range in <=30 day chunks, since OASIS caps most reports at 31 days.
-fetch_range <- function(queryname, from, to, extra = list(), pause = 5) {
+fetch_range <- function(queryname, from, to, extra = list(), pause = 10) {
   starts <- seq(from, to, by = "30 days")
   out <- vector("list", length(starts))
   
