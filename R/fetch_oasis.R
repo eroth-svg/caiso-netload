@@ -4,8 +4,7 @@ library(dplyr)
 library(lubridate)
 
 # Downloads one OASIS report. OASIS returns a ZIP containing one CSV.
-fetch_oasis <- function(queryname, start, end, extra = list()) {
-  
+fetch_oasis <- function(queryname, start, end, extra = list(), version = 1) {  
   # OASIS requires UTC timestamps formatted like 20250415T07:00-0000
   fmt <- function(x) format(with_tz(x, "UTC"), "%Y%m%dT%H:%M-0000")
   
@@ -13,7 +12,7 @@ fetch_oasis <- function(queryname, start, end, extra = list()) {
     req_url_query(
       resultformat  = 6,
       queryname     = queryname,
-      version       = 1,
+      version       = version,
       startdatetime = fmt(start),
       enddatetime   = fmt(end),
       !!!extra
