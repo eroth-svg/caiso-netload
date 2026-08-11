@@ -41,3 +41,83 @@ net <- full |>
 
 stopifnot(nrow(net) == 23375)
 write_csv(net, "data/caiso_netload_hourly.csv")
+
+# =====================================================================
+# BENCHMARK: CAISO's own day-ahead net load forecast
+#   net_forecast = (day-ahead load forecast) - (day-ahead renewables forecast)
+# This is the number every model in the paper is measured against.
+# =====================================================================
+
+# ZP26 wind is excluded here exactly as on the actual side (Sec 6.1).
+# The symmetry is mandatory, not cosmetic: differencing a 6-series
+# forecast against a 5-series actual would bias the benchmark by the
+# full ZP26 wind amount from 2024-02-08 onward.
+ren_dam <- read_csv("data-raw/sld_ren_fcst_dam.csv", show_col_types = FALSE)
+
+ren_dam_hourly <- ren_dam |>
+  filter(!(RENEWABLE_TYPE == "Wind" & TRADING_HUB == "ZP26")) |>
+  distinct(INTERVALSTARTTIME_GMT, RENEWABLE_TYPE, TRADING_HUB, .keep_all = TRUE) |>
+  group_by(INTERVALSTARTTIME_GMT) |>
+  summarise(ren_dam = sum(MW), n_series = n(), .groups = "drop") |>
+  mutate(ren_dam = if_else(n_series == 5L, ren_dam, NA_real_)) |>
+  select(INTERVALSTARTTIME_GMT, ren_dam) |>
+  arrange(INTERVALSTARTTIME_GMT)
+
+# err sign convention matches `full`: (forecast - actual).
+# Negative bias => CAISO forecasts below what actually happened.
+net2 <- net |>
+  inner_join(ren_dam_hourly, by = "INTERVALSTARTTIME_GMT") |>
+  filter(!is.na(ren_dam)) |>
+  mutate(
+    net_forecast = forecast - ren_dam,
+    net_err      = net_forecast - net_actual,
+    net_pct      = net_err / net_actual * 100
+  ) |>
+  arrange(INTERVALSTARTTIME_GMT)
+
+# --- Metrics ---------------------------------------------------------
+# MAE and RMSE are primary. MAPE is reported for continuity with the
+# gross-load results but is unstable here: the denominator gets small at
+# midday (Sec 8.2). The two normalised variants have stable denominators.
+benchmark_overall <- net2 |>
+  summarise(
+    n         = n(),
+    bias      = mean(net_err),
+    MAE       = mean(abs(net_err)),
+    RMSE      = sqrt(mean(net_err^2)),
+    MAPE      = mean(abs(net_err / net_actual)) * 100,
+    nMAE_mean = mean(abs(net_err)) / mean(net_actual) * 100,
+    nMAE_peak = mean(abs(net_err)) / max(net_actual)  * 100
+  )
+
+benchmark_hourly <- net2 |>
+  group_by(OPR_HR) |>
+  summarise(
+    n        = n(),
+    mean_net = mean(net_actual),
+    bias     = mean(net_err),
+    MAE      = mean(abs(net_err)),
+    RMSE     = sqrt(mean(net_err^2)),
+    MAPE     = mean(abs(net_err / net_actual)) * 100,
+    .groups  = "drop"
+  ) |>
+  arrange(OPR_HR)
+
+if (!dir.exists("output")) dir.create("output")
+write_csv(net2,              "data/caiso_netload_benchmark_hourly.csv")
+write_csv(benchmark_overall, "output/benchmark_overall.csv")
+write_csv(benchmark_hourly,  "output/benchmark_by_hour.csv")
+
+# --- Guards ----------------------------------------------------------
+# Informative rather than bare integers: a failure should say what broke.
+if (nrow(net2) != 23375) {
+  stop(sprintf(
+    "net2 has %d rows, expected 23375 (lost %d to the DAM renewables join)",
+    nrow(net2), 23375 - nrow(net2)))
+}
+if (!isTRUE(all.equal(benchmark_overall$MAE,  2077.21, tolerance = 1e-4))) {
+  stop(sprintf("MAE drifted: got %.2f, expected 2077.21",  benchmark_overall$MAE))
+}
+if (!isTRUE(all.equal(benchmark_overall$RMSE, 3243.86, tolerance = 1e-4))) {
+  stop(sprintf("RMSE drifted: got %.2f, expected 3243.86", benchmark_overall$RMSE))
+}

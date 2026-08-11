@@ -63,10 +63,71 @@ stations <- c("GHCND:USW00023174",  # LAX
               "GHCND:USW00023293",  # San Jose
               "GHCND:USW00003171")  # Riverside Muni
 
-weights <- tibble(
-  station = stations,
-  w = c(0.30, 0.10, 0.15, 0.12, 0.10, 0.13, 0.10)
+# =====================================================================
+# Station weights derived from observed CAISO TAC-area load share.
+#
+# Rule (stated in full so every number is traceable):
+#   1. Load share per TAC area over the modelling window
+#      2023-05-01 -> 2025-12-31, from SLD_FCST/ACTUAL.
+#   2. VEA-TAC dropped: Nevada, outside the CA weather footprint,
+#      0.273% of load. Remaining shares renormalised.
+#   3. MWD-TAC folded into SCE-TAC: Southern California water pumping,
+#      same climate zone, 0.58% of load.
+#   4. Each TAC's share split EVENLY across its stations.
+#      No population data used anywhere.
+#
+# Known limitation: TAC load share drifts across the sample. PGE falls
+# 0.454 -> 0.430 and SCE rises 0.451 -> 0.473 from 2021 to 2025,
+# monotonic from 2022. A single fixed vector is a window average.
+# =====================================================================
+
+station_tac <- tibble::tribble(
+  ~station,             ~region,             ~tac,
+  "GHCND:USW00023234",  "Bay Area",          "PGE-TAC",
+  "GHCND:USW00023293",  "South Bay",         "PGE-TAC",
+  "GHCND:USW00023232",  "Sacramento Valley", "PGE-TAC",
+  "GHCND:USW00093193",  "Central Valley",    "PGE-TAC",
+  "GHCND:USW00023174",  "LA Basin",          "SCE-TAC",
+  "GHCND:USW00003171",  "Inland Empire",     "SCE-TAC",
+  "GHCND:USW00023188",  "San Diego",         "SDGE-TAC"
 )
+
+build_weights <- function(win_start = as.POSIXct("2023-05-01 07:00:00", tz = "UTC"),
+                          win_end   = as.POSIXct("2026-01-01 08:00:00", tz = "UTC")) {
+  
+  # fetch_noaa.R has no reason to have loaded the CAISO load file, so read
+  # it here if it isn't already in the session.
+  if (!exists("load_act", envir = globalenv())) {
+    load_act <- readr::read_csv("data-raw/sld_fcst_actual.csv",
+                                show_col_types = FALSE)
+  } else {
+    load_act <- get("load_act", envir = globalenv())
+  }
+  
+  tac_share <- load_act |>
+    dplyr::filter(TAC_AREA_NAME %in% c("PGE-TAC","SCE-TAC","SDGE-TAC","MWD-TAC"),
+                  INTERVALSTARTTIME_GMT >= win_start,
+                  INTERVALSTARTTIME_GMT <  win_end) |>
+    dplyr::distinct(INTERVALSTARTTIME_GMT, TAC_AREA_NAME, .keep_all = TRUE) |>
+    dplyr::mutate(tac = dplyr::if_else(TAC_AREA_NAME == "MWD-TAC",
+                                       "SCE-TAC", TAC_AREA_NAME)) |>
+    dplyr::group_by(tac) |>
+    dplyr::summarise(mwh = sum(MW), .groups = "drop") |>
+    dplyr::mutate(tac_share = mwh / sum(mwh))
+  
+  w <- station_tac |>
+    dplyr::left_join(tac_share, by = "tac") |>
+    dplyr::group_by(tac) |>
+    dplyr::mutate(w = tac_share / dplyr::n()) |>
+    dplyr::ungroup() |>
+    dplyr::select(station, region, tac, w)
+  
+  stopifnot(!any(is.na(w$w)))
+  stopifnot(isTRUE(all.equal(sum(w$w), 1, tolerance = 1e-10)))
+  w
+}
+
+weights <- build_weights()
 
 build_weather_daily <- function(wx) {
   wx |>
