@@ -1,5 +1,6 @@
 library(httr2); library(dplyr); library(purrr); library(tibble); library(lubridate)
 
+# --- NOAA CDO API wrapper. Token lives in .Renviron, not in this file. ---
 noaa_get <- function(endpoint, params = list()) {
   request("https://www.ncei.noaa.gov/cdo-web/api/v2") |>
     req_url_path_append(endpoint) |>
@@ -9,7 +10,7 @@ noaa_get <- function(endpoint, params = list()) {
     resp_body_json()
 }
 
-# One station, one datatype, one year at a time (API caps at 1000 records).
+# One station, one datatype, one year (API caps at 1000 records per request).
 fetch_noaa_year <- function(station, datatype, year) {
   r <- noaa_get("data", list(
     datasetid  = "GHCND",
@@ -29,6 +30,7 @@ fetch_noaa_year <- function(station, datatype, year) {
   )
 }
 
+# Loop over every station x datatype x year combination.
 fetch_noaa_range <- function(stations, datatypes, years, pause = 0.5) {
   grid <- expand.grid(station = stations, datatype = datatypes, year = years,
                       stringsAsFactors = FALSE)
@@ -38,12 +40,17 @@ fetch_noaa_range <- function(stations, datatypes, years, pause = 0.5) {
     message(sprintf("[%d/%d] %s %s %d", i, nrow(grid), g$station, g$datatype, g$year))
     out[[i]] <- tryCatch(
       fetch_noaa_year(g$station, g$datatype, g$year),
-      error = function(e) { warning(sprintf("FAILED %s %s %d: %s", g$station, g$datatype, g$year, conditionMessage(e))); NULL }
+      error = function(e) {
+        warning(sprintf("FAILED %s %s %d: %s", g$station, g$datatype, g$year,
+                        conditionMessage(e)))
+        NULL
+      }
     )
     Sys.sleep(pause)
   }
   bind_rows(out) |> distinct()
 }
+
 # --- Station selection and population weights ---
 # Seven airport stations covering CAISO's major load centers.
 # NOTE: weights are approximate population shares, NOT a documented CAISO
