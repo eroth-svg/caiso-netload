@@ -1,11 +1,13 @@
 source("R/backtest.R")
 
-design <- function(d, use_caiso) {
-  d$hr <- factor(pmin(d$OPR_HR, 24), levels = 1:24)
+design <- function(d, use_caiso = TRUE, use_trend = TRUE) {
+  d$hr   <- factor(pmin(d$OPR_HR, 24), levels = 1:24)
+  d$tnum <- as.numeric(difftime(d$ts, as.POSIXct("2023-05-01", tz = "UTC"), units = "days")) / 365.25
   f <- ~ hr + dow + month + hol_class + is_bridge +
     cdd_lag1 + hdd_lag1 +
     net_lag48 + net_lag168 + net_lag336 + net_lag_mean6
   if (use_caiso) f <- update(f, ~ . + hr:net_forecast)
+  if (use_trend) f <- update(f, ~ . + hr:tnum)
   model.matrix(f, d)
 }
 
@@ -17,11 +19,11 @@ ols_normal <- function(X, y) {
 
 ols_qr <- function(X, y) as.numeric(qr.solve(X, y))
 
-make_ols_fit <- function(use_caiso = TRUE, method = c("qr", "normal")) {
+make_ols_fit <- function(use_caiso = TRUE, use_trend = TRUE, method = c("qr", "normal")) {
   method <- match.arg(method)
   function(tr, te) {
-    Xtr <- design(tr, use_caiso)
-    Xte <- design(te, use_caiso)
+    Xtr <- design(tr, use_caiso, use_trend)
+    Xte <- design(te, use_caiso, use_trend)
     keep <- intersect(colnames(Xtr), colnames(Xte))
     Xtr <- Xtr[, keep, drop = FALSE]
     Xte <- Xte[, keep, drop = FALSE]
@@ -30,10 +32,10 @@ make_ols_fit <- function(use_caiso = TRUE, method = c("qr", "normal")) {
   }
 }
 
-check_ols_agreement <- function(p, folds, use_caiso = TRUE, fold = 1) {
+check_ols_agreement <- function(p, folds, use_caiso = TRUE, use_trend = TRUE, fold = 1) {
   tr <- p[folds[[fold]]$train, ]
   tr <- tr[tr$lag_complete, ]
-  X  <- design(tr, use_caiso)
+  X  <- design(tr, use_caiso, use_trend)
   y  <- tr$net_actual
   q  <- qr(X)
   bn <- ols_normal(X, y)
