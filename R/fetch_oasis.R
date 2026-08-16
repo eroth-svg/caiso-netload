@@ -5,8 +5,8 @@ library(lubridate)
 
 # Downloads one OASIS report. OASIS returns a ZIP containing one CSV.
 fetch_oasis <- function(queryname, start, end, extra = list(), version = 1) {  
-  # OASIS requires UTC timestamps formatted like 20250415T07:00-0000
   fmt <- function(x) format(with_tz(x, "UTC"), "%Y%m%dT%H:%M-0000")
+  #with_tx comes from lubridate library, 4-d year, 2-d month, 2-d d, hour:min, UTC is +7 hours of PT
   
   req <- request("https://oasis.caiso.com/oasisapi/SingleZip") |>
     req_url_query(
@@ -30,10 +30,11 @@ fetch_oasis <- function(queryname, start, end, extra = list(), version = 1) {
   if (length(csv) == 0) {
     stop("No CSV returned. OASIS probably errored - check the date range.")
   }
-  read_csv(csv[1], show_col_types = FALSE)
+  stopifnot(length(csv) == 1)
+  read_csv(csv[1], show_col_types = FALSE)  #technically a tibble
 }
 
-# Fetch a long date range in <=30 day chunks, since OASIS caps most reports at 31 days.
+# Fetch a long date range in <=30 day chunks, since OASIS caps  most reports at 31 days.
 fetch_range <- function(queryname, from, to, extra = list(), pause = 10) {
   starts <- seq(from, to, by = "30 days")
   out <- vector("list", length(starts))
