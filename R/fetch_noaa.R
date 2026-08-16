@@ -1,6 +1,6 @@
 library(httr2); library(dplyr); library(purrr); library(tibble); library(lubridate)
 
-# --- NOAA CDO API wrapper. Token lives in .Renviron, not in this file. ---
+# NOAA CDO API wrapper. Token lives in .Renviron, not in this file.
 noaa_get <- function(endpoint, params = list()) {
   request("https://www.ncei.noaa.gov/cdo-web/api/v2") |>
     req_url_path_append(endpoint) |>
@@ -38,23 +38,25 @@ fetch_noaa_range <- function(stations, datatypes, years, pause = 0.5) {
   for (i in seq_len(nrow(grid))) {
     g <- grid[i, ]
     message(sprintf("[%d/%d] %s %s %d", i, nrow(grid), g$station, g$datatype, g$year))
-    out[[i]] <- tryCatch(
+    out[i] <- list(tryCatch(
       fetch_noaa_year(g$station, g$datatype, g$year),
       error = function(e) {
         warning(sprintf("FAILED %s %s %d: %s", g$station, g$datatype, g$year,
                         conditionMessage(e)))
         NULL
       }
-    )
+    ))
     Sys.sleep(pause)
+  }
+  failed <- vapply(out, is.null, logical(1))
+  if (any(failed)) {
+    stop(sprintf("%d station/datatype/year combination(s) failed: rows %s",
+                 sum(failed), paste(which(failed), collapse = ", ")))
   }
   bind_rows(out) |> distinct()
 }
 
-# --- Station selection and population weights ---
 # Seven airport stations covering CAISO's major load centers.
-# NOTE: weights are approximate population shares, NOT a documented CAISO
-# load allocation. Consider re-deriving from TAC-area load shares.
 stations <- c("GHCND:USW00023174",  # LAX
               "GHCND:USW00023188",  # San Diego Intl
               "GHCND:USW00023234",  # SFO
@@ -95,8 +97,6 @@ station_tac <- tibble::tribble(
 build_weights <- function(win_start = as.POSIXct("2023-05-01 07:00:00", tz = "UTC"),
                           win_end   = as.POSIXct("2026-01-01 08:00:00", tz = "UTC")) {
   
-  # fetch_noaa.R has no reason to have loaded the CAISO load file, so read
-  # it here if it isn't already in the session.
   if (!exists("load_act", envir = globalenv())) {
     load_act <- readr::read_csv("data-raw/sld_fcst_actual.csv",
                                 show_col_types = FALSE)
